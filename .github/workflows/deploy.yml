@@ -1,22 +1,91 @@
-name: Validate Website
+name: Validate and Deploy Portfolio
 
+# Run CI/CD whenever code is pushed to the production branch.
 on:
   push:
     branches:
-      - main
+      - master
+  # Allow a deployment to be started manually from the Actions tab.
+  workflow_dispatch:
+
+# Grant only the permissions required to publish to GitHub Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Prevent overlapping deployments of the same site.
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   validate:
+    name: Validate website
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # Download the repository into the GitHub Actions runner.
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Check files exist
+      # Install the latest supported Node.js LTS release and enable npm caching.
+      - name: Set up Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: npm
+
+      # Fail early if the static website entry point is missing.
+      - name: Validate required files
+        run: test -f index.html
+
+      # Install the dependencies declared in package.json.
+      - name: Install dependencies
+        run: npm install
+
+      # Run a build when a build script is added; otherwise continue successfully.
+      - name: Run optional build
+        run: npm run build --if-present
+
+      # Read the repository's GitHub Pages configuration for this deployment.
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      # Stage only deployable frontend files, excluding Git, CI, and Node.js internals.
+      - name: Prepare static site
         run: |
-          test -f index.html
-          test -f styles.css
-          test -f script.js
+          mkdir -p site
+          rsync -av \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='node_modules/' \
+            --exclude='site/' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
+            --exclude='index.js' \
+            ./ site/
 
-      - name: Success
-        run: echo "Website validation passed!"
+      # Package the validated static site for the deployment job.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: validate
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # Publish the prepared artifact to GitHub Pages.
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
+# Azure Static Web Apps note:
+# The validated site is fully static. A future Azure deployment can use `/` as
+# app_location and an empty output_location with skip_app_build set to true.
